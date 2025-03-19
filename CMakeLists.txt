@@ -6,7 +6,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_CXX_STANDARD 17)
-SET(CMAKE_BUILD_TYPE "Release")
+SET(CMAKE_BUILD_TYPE "RelWithDebInfo")
 #SET(CMAKE_CXX_FLAGS_DEBUG "$ENV{CXXFLAGS} -O0 -Wall -g -ggdb")
 #SET(CMAKE_CXX_FLAGS_RELEASE "$ENV{CXXFLAGS} -O3 -Wall")
 ## Find catkin macros and libraries
@@ -50,8 +50,8 @@ include_directories(
 add_library(utils_lib src/utils.cpp)
 
 
-add_executable(btc_place_recognition example/place_recognition.cpp src/btc.cpp)
-target_link_libraries(btc_place_recognition 
+add_executable(kitti_btc_place_recognition example/KITTI/kitti_btc_place_recognition.cpp src/btc.cpp)
+target_link_libraries(kitti_btc_place_recognition 
         ${catkin_LIBRARIES} 
         ${PCL_LIBRARIES} 
         ${OpenCV_LIBS} 

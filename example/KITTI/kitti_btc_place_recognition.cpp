@@ -5,9 +5,17 @@
 #include <sensor_msgs/PointCloud2.h>
 
 #include <boost/filesystem.hpp>
+#include <signal.h>
+#include <thread>
 
 #include "include/btc.h"
 #include "include/utils.h"
+
+bool flg_exit_ = false;
+void SigHandle(int sig) {
+  flg_exit_ = true;
+  std::cout << "recv signal" << std::endl;
+}
 
 // Read KITTI data
 std::vector<float> read_lidar_data(const std::string lidar_data_path) {
@@ -15,7 +23,7 @@ std::vector<float> read_lidar_data(const std::string lidar_data_path) {
   lidar_data_file.open(lidar_data_path,
                        std::ifstream::in | std::ifstream::binary);
   if (!lidar_data_file) {
-    std::cout << "Read End..." << std::endl;
+    std::cout << "Read End..." << lidar_data_path<<std::endl;
     std::vector<float> nan_data;
     return nan_data;
     // exit(-1);
@@ -33,6 +41,8 @@ std::vector<float> read_lidar_data(const std::string lidar_data_path) {
 int main(int argc, char **argv) {
   ros::init(argc, argv, "btc_place_recognition");
   ros::NodeHandle nh;
+  signal(SIGINT, SigHandle);
+  
   std::string setting_path = "";
   std::string pcds_dir = "";
   std::string pose_file = "";
@@ -40,11 +50,13 @@ int main(int argc, char **argv) {
   double cloud_overlap_thr = 0.5;
   bool calc_gt_enable = false;
   bool read_bin = true;
+  bool enable_transform = false;
   nh.param<double>("cloud_overlap_thr", cloud_overlap_thr, 0.5);
   nh.param<std::string>("setting_path", setting_path, "");
   nh.param<std::string>("pcds_dir", pcds_dir, "");
   nh.param<std::string>("pose_file", pose_file, "");
   nh.param<bool>("read_bin", read_bin, true);
+  nh.param<bool>("enable_transform", enable_transform, true);
 
   ros::Publisher pubOdomAftMapped =
       nh.advertise<nav_msgs::Odometry>("/aft_mapped_to_init", 10);
@@ -99,25 +111,29 @@ int main(int argc, char **argv) {
   std::vector<double> time_list;
   load_evo_pose_with_time(pose_file, pose_list, time_list);
   std::string print_msg = "Successfully load pose file:" + pose_file +
-                          ". pose size:" + std::to_string(time_list.size());
+                          ". pose size:" + std::to_string(pose_list.size()) +
+                          " time size:" + std::to_string(time_list.size());
   ROS_INFO_STREAM(print_msg.c_str());
+  if(pose_list.empty() || time_list.empty()){
+    ROS_ERROR_STREAM("pose_list or time_list is empty!");
+    return -1;
+  }
 
   BtcDescManager *btc_manager = new BtcDescManager(config_setting);
   btc_manager->print_debug_info_ = false;
-  pcl::PointCloud<pcl::PointXYZI>::Ptr temp_cloud(
-      new pcl::PointCloud<pcl::PointXYZI>());
 
   std::vector<double> descriptor_time;
   std::vector<double> querying_time;
   std::vector<double> update_time;
   int triggle_loop_num = 0;
   int true_loop_num = 0;
+  int false_loop_num = 0;
   bool finish = false;
-
-  pcl::PCDReader reader;
 
   while (ros::ok() && !finish) {
     for (size_t submap_id = 0; submap_id < pose_list.size(); ++submap_id) {
+
+      // load pcd
       pcl::PointCloud<pcl::PointXYZI>::Ptr cloud(
           new pcl::PointCloud<pcl::PointXYZI>());
       pcl::PointCloud<pcl::PointXYZI> transform_cloud;
@@ -144,14 +160,19 @@ int main(int argc, char **argv) {
           point.z = lidar_data[i + 2];
           point.intensity = lidar_data[i + 3];
           Eigen::Vector3d pv = point2vec(point);
-          pv = rotation * pv + translation;
-          cloud->points.push_back(point);
-          point = vec2point(pv);
-          transform_cloud.points.push_back(vec2point(pv));
+          if (enable_transform) {
+            pv = rotation * pv + translation;
+            cloud->points.push_back(point);
+            point = vec2point(pv);
+            transform_cloud.points.push_back(vec2point(pv));
+          } else {
+            transform_cloud.points.push_back(vec2point(pv));
+          }
         }
+        // auto transform_cloud = read_lidar_cloud();
         auto t_load_end = std::chrono::high_resolution_clock::now();
         std::cout << "[Time] load cloud: " << time_inc(t_load_end, t_load_start)
-                  << "ms, " << std::endl;
+                  << "ms, " << transform_cloud.size() << std::endl;
       } else {
         // Load point cloud from pcd file
         std::stringstream ss;
@@ -161,6 +182,7 @@ int main(int argc, char **argv) {
 
         auto t_load_start = std::chrono::high_resolution_clock::now();
         // pcl::io::loadPCDFile<pcl::PointXYZI>(pcd_file, *cloud)
+        pcl::PCDReader reader;
         if (reader.read(pcd_file, *cloud) == -1) {
           ROS_ERROR_STREAM("Couldn't read file " << pcd_file);
           continue;
@@ -177,6 +199,7 @@ int main(int argc, char **argv) {
         }
       }
 
+      // ===============================================================================
       // step1. Descriptor Extraction
       std::cout << "[Description] submap id:" << submap_id << std::endl;
       auto t_descriptor_begin = std::chrono::high_resolution_clock::now();
@@ -185,13 +208,16 @@ int main(int argc, char **argv) {
                                     btcs_vec);
       auto t_descriptor_end = std::chrono::high_resolution_clock::now();
       descriptor_time.push_back(time_inc(t_descriptor_end, t_descriptor_begin));
+
       // step2. Searching Loop
       auto t_query_begin = std::chrono::high_resolution_clock::now();
-      std::pair<int, double> search_result(-1, 0);
+      // search result
+      std::pair<int, double> search_result(-1, 0); // <candidate_id, plane icp score>
       std::pair<Eigen::Vector3d, Eigen::Matrix3d> loop_transform;
       loop_transform.first << 0, 0, 0;
       loop_transform.second = Eigen::Matrix3d::Identity();
       std::vector<std::pair<BTC, BTC>> loop_std_pair;
+      
       if (submap_id > config_setting.skip_near_num_) {
         if (btcs_vec.size() == 0) {
           // getchar();
@@ -220,16 +246,19 @@ int main(int argc, char **argv) {
                 << std::endl;
       std::cout << std::endl;
 
-      // down sample to save memory
+      // key_cloud_vec_ is used to calc overlap,down sample to save memory
       down_sampling_voxel(transform_cloud, 0.5);
       btc_manager->key_cloud_vec_.push_back(transform_cloud.makeShared());
+      // ===============================================================================
 
-      // visuliazaion
+      // visulizaion
+      // publish source cloud
       sensor_msgs::PointCloud2 pub_cloud;
       pcl::toROSMsg(transform_cloud, pub_cloud);
       pub_cloud.header.frame_id = "camera_init";
       pubCureentCloud.publish(pub_cloud);
 
+      // publish BTC descriptor points
       pcl::PointCloud<pcl::PointXYZ> key_points_cloud;
       for (auto var : btc_manager->history_binary_list_.back()) {
         pcl::PointXYZ pi;
@@ -238,10 +267,15 @@ int main(int argc, char **argv) {
         pi.z = var.location_[2];
         key_points_cloud.push_back(pi);
       }
-      pcl::toROSMsg(key_points_cloud, pub_cloud);
-      pub_cloud.header.frame_id = "camera_init";
-      pubCurrentBinary.publish(pub_cloud);
+      if (key_points_cloud.size()) {
+        pcl::toROSMsg(key_points_cloud, pub_cloud);
+        pub_cloud.header.frame_id = "camera_init";
+        pubCurrentBinary.publish(pub_cloud);
+      } else {
+        ROS_ERROR_STREAM("key_points_cloud is empty!");
+      }
 
+      // publish pair
       visualization_msgs::MarkerArray marker_array;
       visualization_msgs::Marker marker;
       marker.header.frame_id = "camera_init";
@@ -256,9 +290,8 @@ int main(int argc, char **argv) {
         Eigen::Matrix4d transform2 = Eigen::Matrix4d::Identity();
         publish_std(loop_std_pair, transform1, transform2, pubBTC);
         slow_loop.sleep();
-        double cloud_overlap =
-            calc_overlap(transform_cloud.makeShared(),
-                         btc_manager->key_cloud_vec_[search_result.first], 0.5);
+
+        // publish matched key points
         pcl::PointCloud<pcl::PointXYZ> match_key_points_cloud;
         for (auto var :
              btc_manager->history_binary_list_[search_result.first]) {
@@ -271,105 +304,73 @@ int main(int argc, char **argv) {
         pcl::toROSMsg(match_key_points_cloud, pub_cloud);
         pub_cloud.header.frame_id = "camera_init";
         pubMatchedBinary.publish(pub_cloud);
+
         // true positive
-        if (cloud_overlap >= cloud_overlap_thr) {
-          true_loop_num++;
-          pcl::PointCloud<pcl::PointXYZRGB> matched_cloud;
-          matched_cloud.resize(
-              btc_manager->key_cloud_vec_[search_result.first]->size());
-          for (size_t i = 0;
-               i < btc_manager->key_cloud_vec_[search_result.first]->size();
-               i++) {
-            pcl::PointXYZRGB pi;
-            pi.x =
-                btc_manager->key_cloud_vec_[search_result.first]->points[i].x;
-            pi.y =
-                btc_manager->key_cloud_vec_[search_result.first]->points[i].y;
-            pi.z =
-                btc_manager->key_cloud_vec_[search_result.first]->points[i].z;
-            pi.r = 0;
-            pi.g = 255;
-            pi.b = 0;
-            matched_cloud.points[i] = pi;
-          }
-          pcl::toROSMsg(matched_cloud, pub_cloud);
-          pub_cloud.header.frame_id = "camera_init";
-          pubMatchedCloud.publish(pub_cloud);
-          slow_loop.sleep();
-
-          marker.scale.x = scale_tp;
-          marker.color = color_tp;
-          geometry_msgs::Point point1;
-          point1.x = pose_list[submap_id - 1].first[0];
-          point1.y = pose_list[submap_id - 1].first[1];
-          point1.z = pose_list[submap_id - 1].first[2];
-          geometry_msgs::Point point2;
-          point2.x = pose_list[submap_id].first[0];
-          point2.y = pose_list[submap_id].first[1];
-          point2.z = pose_list[submap_id].first[2];
-          marker.points.push_back(point1);
-          marker.points.push_back(point2);
-
-        } else {
-          pcl::PointCloud<pcl::PointXYZRGB> matched_cloud;
-          matched_cloud.resize(
-              btc_manager->key_cloud_vec_[search_result.first]->size());
-          for (size_t i = 0;
-               i < btc_manager->key_cloud_vec_[search_result.first]->size();
-               i++) {
-            pcl::PointXYZRGB pi;
-            pi.x =
-                btc_manager->key_cloud_vec_[search_result.first]->points[i].x;
-            pi.y =
-                btc_manager->key_cloud_vec_[search_result.first]->points[i].y;
-            pi.z =
-                btc_manager->key_cloud_vec_[search_result.first]->points[i].z;
-            pi.r = 255;
-            pi.g = 0;
-            pi.b = 0;
-            matched_cloud.points[i] = pi;
-          }
-          pcl::toROSMsg(matched_cloud, pub_cloud);
-          pub_cloud.header.frame_id = "camera_init";
-          pubMatchedCloud.publish(pub_cloud);
-          slow_loop.sleep();
-          marker.scale.x = scale_fp;
-          marker.color = color_fp;
-          geometry_msgs::Point point1;
-          point1.x = pose_list[submap_id - 1].first[0];
-          point1.y = pose_list[submap_id - 1].first[1];
-          point1.z = pose_list[submap_id - 1].first[2];
-          geometry_msgs::Point point2;
-          point2.x = pose_list[submap_id].first[0];
-          point2.y = pose_list[submap_id].first[1];
-          point2.z = pose_list[submap_id].first[2];
-          marker.points.push_back(point1);
-          marker.points.push_back(point2);
+        pcl::PointCloud<pcl::PointXYZI>::Ptr matcher_cloud =
+            btc_manager->key_cloud_vec_[search_result.first];
+        pcl::PointCloud<pcl::PointXYZRGB> matched_cloud_rgb;
+        int matched_cloud_size = matcher_cloud->size();
+        matched_cloud_rgb.resize(matched_cloud_size);
+        for (size_t i = 0; i < matched_cloud_size; i++) {
+          auto& pi = matched_cloud_rgb.points[i];
+          pi.x = matcher_cloud->points[i].x;
+          pi.y = matcher_cloud->points[i].y;
+          pi.z = matcher_cloud->points[i].z;
+          pi.r = pi.g = pi.b = 0;
         }
 
+        double cloud_overlap =
+            calc_overlap(transform_cloud.makeShared(), matcher_cloud, 0.5);
+        if (cloud_overlap >= cloud_overlap_thr) {
+          true_loop_num++;
+          for (size_t i = 0; i < matched_cloud_size; i++) {
+            auto &pi = matched_cloud_rgb.points[i];
+            pi.g = 255;
+          }
+          marker.scale.x = scale_tp;
+          marker.color = color_tp;
+        } else {
+          for (size_t i = 0; i < matched_cloud_size; i++) {
+            auto &pi = matched_cloud_rgb.points[i];
+            pi.r = 255;
+          }
+          marker.scale.x = scale_fp;
+          marker.color = color_fp;
+        }
+        // puslish matched cloud rgb
+        pcl::toROSMsg(matched_cloud_rgb, pub_cloud);
+        pub_cloud.header.frame_id = "camera_init";
+        pubMatchedCloud.publish(pub_cloud);
+
+        slow_loop.sleep();
       } else {
         if (submap_id > 0) {
           marker.scale.x = scale_path;
           marker.color = color_path;
-          geometry_msgs::Point point1;
-          point1.x = pose_list[submap_id - 1].first[0];
-          point1.y = pose_list[submap_id - 1].first[1];
-          point1.z = pose_list[submap_id - 1].first[2];
-          geometry_msgs::Point point2;
-          point2.x = pose_list[submap_id].first[0];
-          point2.y = pose_list[submap_id].first[1];
-          point2.z = pose_list[submap_id].first[2];
-          marker.points.push_back(point1);
-          marker.points.push_back(point2);
         }
       }
+      // publish marker
+      geometry_msgs::Point point1;
+      point1.x = pose_list[submap_id - 1].first[0];
+      point1.y = pose_list[submap_id - 1].first[1];
+      point1.z = pose_list[submap_id - 1].first[2];
+      geometry_msgs::Point point2;
+      point2.x = pose_list[submap_id].first[0];
+      point2.y = pose_list[submap_id].first[1];
+      point2.z = pose_list[submap_id].first[2];
+      marker.points.push_back(point1);
+      marker.points.push_back(point2);
       marker_array.markers.push_back(marker);
       pubLoopStatus.publish(marker_array);
+
       loop.sleep();
+      if (flg_exit_)
+        break;
     }
     finish = true;
   }
 
+  // publish time cost
   double mean_descriptor_time =
       std::accumulate(descriptor_time.begin(), descriptor_time.end(), 0) * 1.0 /
       descriptor_time.size();
@@ -381,7 +382,8 @@ int main(int argc, char **argv) {
       update_time.size();
   std::cout << "Total submap number:" << pose_list.size()
             << ", triggle loop number:" << triggle_loop_num
-            << ", true loop number:" << true_loop_num << std::endl;
+            << ", true loop number:" << true_loop_num
+            << ", recall: " << true_loop_num / triggle_loop_num << std::endl;
   std::cout << "Mean time for descriptor extraction: " << mean_descriptor_time
             << "ms, query: " << mean_query_time
             << "ms, update: " << mean_update_time << "ms, total: "
