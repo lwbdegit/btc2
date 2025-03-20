@@ -1,0 +1,24 @@
+<launch>
+<!-- Launch file for Place recognition example -->
+
+  <arg name="rviz" default="true" />
+
+  <node 
+		pkg="btc_desc" 
+		type="rs_btc_place_recognition" 
+		name="rs_btc_place_recognition" 
+		output="screen" 
+	/>
+
+  <param name="cloud_overlap_thr" type="double" value = "0.25"/>
+  <param name="read_bin" type="bool" value="false" />
+  <param name="setting_path" type="string" value = "$(find btc_desc)/config/config_outdoor.yaml"/>
+  <param name="pcds_dir" type="string" value = "/home/sti/2TB_HDD/Rumble/workspace/robot_slam/BTC/src/my_btc/example/RS/data/heilou3/single_frame"/>
+  <param name="pose_file" type="string" value = "/home/sti/2TB_HDD/Rumble/workspace/robot_slam/BTC/src/my_btc/example/RS/data/heilou3/utm_L_opt_pose_W.txt"/>
+  <param name="enable_transform" type="bool" value="true" />
+
+  <group if="$(arg rviz)">
+    <node launch-prefix="nice" pkg="rviz" type="rviz" name="rviz" args="-d $(find btc_desc)/rviz_cfg/loop.rviz" />
+  </group>
+
+</launch>

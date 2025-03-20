@@ -59,5 +59,14 @@ target_link_libraries(kitti_btc_place_recognition
         tbb
         utils_lib)
 
+add_executable(rs_btc_place_recognition example/RS/rs_btc_place_recognition.cpp src/btc.cpp)
+target_link_libraries(rs_btc_place_recognition 
+        ${catkin_LIBRARIES} 
+        ${PCL_LIBRARIES} 
+        ${OpenCV_LIBS} 
+        ${CERES_LIBRARIES} 
+        tbb
+        utils_lib) 
+
               
       
