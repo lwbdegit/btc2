@@ -522,40 +522,49 @@ void pubPlane(const ros::Publisher &plane_pub, const std::string plane_ns,
 
 void BtcDescManager::GenerateBtcDescs(
     const pcl::PointCloud<pcl::PointXYZI>::Ptr &input_cloud, const int frame_id,
-    std::vector<BTC> &btcs_vec) {  // step1, voxelization and plane dection
+    std::vector<BTC> &btcs_vec) {
+  // step1, voxelization and plane dection
   std::unordered_map<VOXEL_LOC, OctoTree *> voxel_map;
   init_voxel_map(input_cloud, voxel_map);
+
+  // step2, get and push plane cloud into database
   pcl::PointCloud<pcl::PointXYZINormal>::Ptr plane_cloud(
       new pcl::PointCloud<pcl::PointXYZINormal>);
   get_plane(voxel_map, plane_cloud);
+  plane_cloud_vec_.push_back(plane_cloud);
   if (print_debug_info_) {
-    std::cout << "[Description] planes size:" << plane_cloud->size()
+    std::cout << "[Description][get_plane] planes size:" << plane_cloud->size()
               << std::endl;
   }
-
-  plane_cloud_vec_.push_back(plane_cloud);
 
   // step3, extraction binary descriptors
   std::vector<std::shared_ptr<Plane>> proj_plane_list;
   std::vector<std::shared_ptr<Plane>> merge_plane_list;
   get_project_plane(voxel_map, proj_plane_list);
   if (proj_plane_list.size() == 0) {
+    // TODO: need better solution
     std::shared_ptr<Plane> single_plane(new Plane);
     single_plane->normal_ << 0, 0, 1;
     single_plane->center_ << input_cloud->points[0].x, input_cloud->points[0].y,
         input_cloud->points[0].z;
     merge_plane_list.push_back(single_plane);
   } else {
+    // TODO: not understood
     sort(proj_plane_list.begin(), proj_plane_list.end(), plane_greater_sort);
     merge_plane(proj_plane_list, merge_plane_list);
     sort(merge_plane_list.begin(), merge_plane_list.end(), plane_greater_sort);
   }
+  if (print_debug_info_) {
+    std::cout << "[Description][merge_plane] proj_plane_list: " << proj_plane_list.size()
+              << " merge_plane_list: " << merge_plane_list.size() << std::endl;
+  }
+
   std::vector<BinaryDescriptor> binary_list;
   binary_extractor(merge_plane_list, input_cloud, binary_list);
   history_binary_list_.push_back(binary_list);
   // corner_cloud_vec_.push_back(corner_points);
   if (print_debug_info_) {
-    std::cout << "[Description] binary size:" << binary_list.size()
+    std::cout << "[Description][binary_extractor] binary size:" << binary_list.size()
               << std::endl;
   }
 
@@ -563,7 +572,7 @@ void BtcDescManager::GenerateBtcDescs(
   btcs_vec.clear();
   generate_btc(binary_list, frame_id, btcs_vec);
   if (print_debug_info_) {
-    std::cout << "[Description] btcs size:" << btcs_vec.size() << std::endl;
+    std::cout << "[Description][generate_btc] btcs size:" << btcs_vec.size() << std::endl;
   }
   // step5, clear memory
   for (auto iter = voxel_map.begin(); iter != voxel_map.end(); iter++) {
@@ -775,6 +784,7 @@ void BtcDescManager::init_voxel_map(
     iter_list.push_back(iter);
     // iter->second->init_octo_tree();
   }
+  // FIXME: bool字段并行有风险
   std::for_each(
       std::execution::par_unseq, index.begin(), index.end(),
       [&](const size_t &i) { iter_list[i]->second->init_octo_tree(); });
@@ -810,6 +820,10 @@ void BtcDescManager::get_project_plane(
   int current_id = 1;
   for (auto iter = origin_list.end() - 1; iter != origin_list.begin(); iter--) {
     for (auto iter2 = origin_list.begin(); iter2 != iter; iter2++) {
+      // RS OPT
+      if ((*iter)->id_ != 0 && (*iter2)->id_ != 0) {
+        continue;
+      }
       Eigen::Vector3d normal_diff = (*iter)->normal_ - (*iter2)->normal_;
       Eigen::Vector3d normal_add = (*iter)->normal_ + (*iter2)->normal_;
       double dis1 =
@@ -845,13 +859,16 @@ void BtcDescManager::get_project_plane(
     if (origin_list[i]->id_ == 0) {
       continue;
     }
+    // 找到已经被聚类（有id）且未合并的平面
     std::shared_ptr<Plane> merge_plane(new Plane);
     (*merge_plane) = (*origin_list[i]);
     bool is_merge = false;
     for (size_t j = 0; j < origin_list.size(); j++) {
       if (i == j) continue;
+      // 找到相同id的平面 进行合并
       if (origin_list[j]->id_ == origin_list[i]->id_) {
         is_merge = true;
+        int new_size = merge_plane->points_size_ + origin_list[j]->points_size_;
         Eigen::Matrix3d P_PT1 =
             (merge_plane->covariance_ +
              merge_plane->center_ * merge_plane->center_.transpose()) *
@@ -863,15 +880,13 @@ void BtcDescManager::get_project_plane(
         Eigen::Vector3d merge_center =
             (merge_plane->center_ * merge_plane->points_size_ +
              origin_list[j]->center_ * origin_list[j]->points_size_) /
-            (merge_plane->points_size_ + origin_list[j]->points_size_);
+            new_size;
         Eigen::Matrix3d merge_covariance =
-            (P_PT1 + P_PT2) /
-                (merge_plane->points_size_ + origin_list[j]->points_size_) -
+            (P_PT1 + P_PT2) / new_size -
             merge_center * merge_center.transpose();
         merge_plane->covariance_ = merge_covariance;
         merge_plane->center_ = merge_center;
-        merge_plane->points_size_ =
-            merge_plane->points_size_ + origin_list[j]->points_size_;
+        merge_plane->points_size_ = new_size;
         merge_plane->sub_plane_num_++;
         // for (size_t k = 0; k < origin_list[j]->cloud.size(); k++) {
         //   merge_plane->cloud.points.push_back(origin_list[j]->cloud.points[k]);
@@ -918,6 +933,10 @@ void BtcDescManager::merge_plane(
   int current_id = 1;
   for (auto iter = origin_list.end() - 1; iter != origin_list.begin(); iter--) {
     for (auto iter2 = origin_list.begin(); iter2 != iter; iter2++) {
+      // RS OPT
+      if ((*iter)->id_ != 0 && (*iter2)->id_ != 0) {
+        continue;
+      }
       Eigen::Vector3d normal_diff = (*iter)->normal_ - (*iter2)->normal_;
       Eigen::Vector3d normal_add = (*iter)->normal_ + (*iter2)->normal_;
       double dis1 =
@@ -960,6 +979,7 @@ void BtcDescManager::merge_plane(
       if (i == j) continue;
       if (origin_list[j]->id_ == origin_list[i]->id_) {
         is_merge = true;
+        int new_size = merge_plane->points_size_ + origin_list[j]->points_size_;
         Eigen::Matrix3d P_PT1 =
             (merge_plane->covariance_ +
              merge_plane->center_ * merge_plane->center_.transpose()) *
@@ -971,15 +991,13 @@ void BtcDescManager::merge_plane(
         Eigen::Vector3d merge_center =
             (merge_plane->center_ * merge_plane->points_size_ +
              origin_list[j]->center_ * origin_list[j]->points_size_) /
-            (merge_plane->points_size_ + origin_list[j]->points_size_);
+            new_size;
         Eigen::Matrix3d merge_covariance =
-            (P_PT1 + P_PT2) /
-                (merge_plane->points_size_ + origin_list[j]->points_size_) -
+            (P_PT1 + P_PT2) / new_size -
             merge_center * merge_center.transpose();
         merge_plane->covariance_ = merge_covariance;
         merge_plane->center_ = merge_center;
-        merge_plane->points_size_ =
-            merge_plane->points_size_ + origin_list[j]->points_size_;
+        merge_plane->points_size_ = new_size;
         merge_plane->sub_plane_num_ += origin_list[j]->sub_plane_num_;
         // for (size_t k = 0; k < origin_list[j]->cloud.size(); k++) {
         //   merge_plane->cloud.points.push_back(origin_list[j]->cloud.points[k]);
@@ -1112,6 +1130,7 @@ void BtcDescManager::extract_binary(
     if (dis < dis_threshold_min || dis > dis_threshold_max) {
       continue;
     } else {
+      // FIXME: double check
       if (dis > dis_threshold_min && dis <= dis_threshold_max) {
         pi.x = x;
         pi.y = y;
