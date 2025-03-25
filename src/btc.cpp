@@ -272,15 +272,14 @@ void publish_std_list(const std::vector<BTC> &btc_list,
 // 给每个三角形描述子三条边画线
 void publish_std(const std::vector<std::pair<BTC, BTC>> &match_std_list,
                  const Eigen::Matrix4d &transform1,
-                 const Eigen::Matrix4d &transform2,
-                 const ros::Publisher &std_publisher) {
+                 const ros::Publisher &std_publisher, bool pub_source) {
   // publish descriptor
   // bool transform_enable = true;
   visualization_msgs::MarkerArray ma_line;
   visualization_msgs::Marker m_line;
   m_line.type = visualization_msgs::Marker::LINE_LIST;
   m_line.action = visualization_msgs::Marker::ADD;
-  m_line.ns = "lines";
+  m_line.ns = "single_BTC_lines";
   // Don't forget to set the alpha!
   m_line.scale.x = 0.25;
   m_line.pose.orientation.w = 1.0;
@@ -295,6 +294,103 @@ void publish_std(const std::vector<std::pair<BTC, BTC>> &match_std_list,
     pub_cnt++;
     m_line.color.a = 0.8;
     m_line.points.clear();
+
+    m_line.color.r = 0.0 / 255;
+    m_line.color.g = 0.0 / 255;
+    m_line.color.b = 255.0 / 255;
+    geometry_msgs::Point p;
+    Eigen::Vector3d t_p;
+    t_p = var.first.binary_A_.location_;
+    t_p = transform1.block<3, 3>(0, 0) * t_p + transform1.block<3, 1>(0, 3);
+    p.x = t_p[0];
+    p.y = t_p[1];
+    p.z = t_p[2];
+    m_line.points.push_back(p);
+
+    t_p = var.first.binary_B_.location_;
+    t_p = transform1.block<3, 3>(0, 0) * t_p + transform1.block<3, 1>(0, 3);
+    p.x = t_p[0];
+    p.y = t_p[1];
+    p.z = t_p[2];
+    m_line.points.push_back(p);
+    ma_line.markers.push_back(m_line);
+    m_line.id++;
+    m_line.points.clear();
+
+    t_p = var.first.binary_C_.location_;
+    t_p = transform1.block<3, 3>(0, 0) * t_p + transform1.block<3, 1>(0, 3);
+    p.x = t_p[0];
+    p.y = t_p[1];
+    p.z = t_p[2];
+    m_line.points.push_back(p);
+    t_p = var.first.binary_B_.location_;
+    t_p = transform1.block<3, 3>(0, 0) * t_p + transform1.block<3, 1>(0, 3);
+    p.x = t_p[0];
+    p.y = t_p[1];
+    p.z = t_p[2];
+    m_line.points.push_back(p);
+    ma_line.markers.push_back(m_line);
+    m_line.id++;
+    m_line.points.clear();
+
+    t_p = var.first.binary_C_.location_;
+    t_p = transform1.block<3, 3>(0, 0) * t_p + transform1.block<3, 1>(0, 3);
+    p.x = t_p[0];
+    p.y = t_p[1];
+    p.z = t_p[2];
+    m_line.points.push_back(p);
+    t_p = var.first.binary_A_.location_;
+    t_p = transform1.block<3, 3>(0, 0) * t_p + transform1.block<3, 1>(0, 3);
+    p.x = t_p[0];
+    p.y = t_p[1];
+    p.z = t_p[2];
+    m_line.points.push_back(p);
+    ma_line.markers.push_back(m_line);
+    m_line.id++;
+    m_line.points.clear();
+    // debug
+    // std_publisher.publish(ma_line);
+    // std::cout << "var first: " << var.first.triangle_.transpose()
+    //           << " , var second: " << var.second.triangle_.transpose()
+    //           << std::endl;
+    // getchar();
+  }
+  for (int j = 0; j < max_pub_cnt * 3; j++) {
+    m_line.color.a = 0.00;
+    ma_line.markers.push_back(m_line);
+    m_line.id++;
+  }
+  std_publisher.publish(ma_line);
+  m_line.id = 0;
+  ma_line.markers.clear();
+}
+
+void publish_std_pair(const std::vector<std::pair<BTC, BTC>> &match_std_list,
+                      const Eigen::Matrix4d &transform1,
+                      const Eigen::Matrix4d &transform2,
+                      const ros::Publisher &std_publisher) {
+  // publish descriptor
+  // bool transform_enable = true;
+  visualization_msgs::MarkerArray ma_line;
+  visualization_msgs::Marker m_line;
+  m_line.type = visualization_msgs::Marker::LINE_LIST;
+  m_line.action = visualization_msgs::Marker::ADD;
+  m_line.ns = "BTC_pair_lines";
+  // Don't forget to set the alpha!
+  m_line.scale.x = 0.25;
+  m_line.pose.orientation.w = 1.0;
+  m_line.header.frame_id = "camera_init";
+  m_line.id = 0;
+  const int max_pub_cnt = 100;
+  int pub_cnt = 1;
+  for (auto var : match_std_list) {
+    if (pub_cnt > max_pub_cnt) {
+      break;
+    }
+    pub_cnt++;
+    m_line.color.a = 0.8;
+    m_line.points.clear();
+    // target triangle
     // m_line.color.r = 0 / 255;
     // m_line.color.g = 233.0 / 255;
     // m_line.color.b = 0 / 255;
@@ -357,6 +453,7 @@ void publish_std(const std::vector<std::pair<BTC, BTC>> &match_std_list,
     m_line.points.clear();
     // 252; 233; 79
 
+    // source triangle
     m_line.color.r = 1;
     m_line.color.g = 1;
     m_line.color.b = 1;

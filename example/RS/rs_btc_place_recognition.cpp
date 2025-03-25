@@ -46,8 +46,7 @@ int main(int argc, char **argv) {
   nh.param<int>("num_localmap_need", num_localmap_need, -1);
   nh.param<double>("cloud_down_voxel", cloud_down_voxel, 0.5);
 
-  ros::Publisher pubOdomAftMapped =
-      nh.advertise<nav_msgs::Odometry>("/aft_mapped_to_init", 10);
+  // cloud
   ros::Publisher pubCurrentCloud =
       nh.advertise<sensor_msgs::PointCloud2>("/cloud_current", 100);
   ros::Publisher pubCurrentBinary =
@@ -61,22 +60,29 @@ int main(int argc, char **argv) {
 
   ros::Publisher pubAlignedSource =
       nh.advertise<sensor_msgs::PointCloud2>("/aligned_source", 100);
-
-  ros::Publisher pubCurrentPose =
-      nh.advertise<nav_msgs::Odometry>("/current_pose", 10);
-  ros::Publisher pubMatchedPose =
-      nh.advertise<nav_msgs::Odometry>("/matched_pose", 10);
   ros::Publisher pubMatchedCloud =
       nh.advertise<sensor_msgs::PointCloud2>("/cloud_matched", 100);
   ros::Publisher pubMatchedBinary =
       nh.advertise<sensor_msgs::PointCloud2>("/cloud_matched_key_points", 100);
   ros::Publisher pubLoopStatus =
       nh.advertise<visualization_msgs::MarkerArray>("/loop_status", 100);
+
+  // BTC
   ros::Publisher pubBTC =
-      nh.advertise<visualization_msgs::MarkerArray>("descriptor_line", 10);
+      nh.advertise<visualization_msgs::MarkerArray>("/BTC_pair_line", 10);
+  ros::Publisher pubAlignedBTC =
+      nh.advertise<visualization_msgs::MarkerArray>("/aligned_BTC_line", 10);
   ros::Publisher pubBTCList =
       nh.advertise<visualization_msgs::MarkerArray>("descriptor_line_list", 10);
 
+  // Pose
+  ros::Publisher pubCurrentPose =
+      nh.advertise<nav_msgs::Odometry>("/current_pose", 10);
+  ros::Publisher pubMatchedPose =
+      nh.advertise<nav_msgs::Odometry>("/matched_pose", 10);
+  ros::Publisher pubOdomAftMapped =
+      nh.advertise<nav_msgs::Odometry>("/aft_mapped_to_init", 10);
+      
   std_msgs::ColorRGBA color_tp;
   std_msgs::ColorRGBA color_fp;
   std_msgs::ColorRGBA color_path;
@@ -250,12 +256,13 @@ int main(int argc, char **argv) {
 
       // publish aligned source cloud
       pcl::PointCloud<pcl::PointXYZI> aligned_localmap_cloud;
-      Eigen::Matrix4d transform = Eigen::Matrix4d::Identity();
+      Eigen::Matrix4d T_target_source = Eigen::Matrix4d::Identity();
       if (search_result.first > 0) {
-        transform.block<3, 3>(0, 0) = loop_transform.second; // T_source_target
-        transform.block<3, 1>(0, 3) = loop_transform.first;
+        T_target_source.block<3, 3>(0, 0) = loop_transform.second; // T_source_target
+        T_target_source.block<3, 1>(0, 3) = loop_transform.first;
+        T_target_source = T_target_source.inverse();
         pcl::transformPointCloud(localmap_cloud, aligned_localmap_cloud,
-                                 Eigen::Matrix4d(transform.inverse()));
+                                 T_target_source);
       }
       pcl::toROSMsg(aligned_localmap_cloud, pub_cloud);
       pub_cloud.header.frame_id = "camera_init";
@@ -379,7 +386,6 @@ int main(int argc, char **argv) {
         LERROR << "[Node][Loop Detection] no loop detected" << REND;
       }
 
-      // publish pair
       visualization_msgs::MarkerArray marker_array;
       visualization_msgs::Marker marker;
       marker.header.frame_id = "camera_init";
@@ -390,9 +396,12 @@ int main(int argc, char **argv) {
       marker.pose.orientation.w = 1.0;
       if (search_result.first >= 0) {
         triggle_loop_num++;
+        // publish BTC pair
         Eigen::Matrix4d transform1 = Eigen::Matrix4d::Identity();
         Eigen::Matrix4d transform2 = Eigen::Matrix4d::Identity();
-        publish_std(loop_std_pair, transform1, transform2, pubBTC);
+        publish_std_pair(loop_std_pair, transform1, transform2, pubBTC);
+        // publish aligned source BTC
+        publish_std(loop_std_pair, T_target_source, pubAlignedBTC, true);
 
         // publish matched key points
         pcl::PointCloud<pcl::PointXYZI> match_key_points_cloud;
@@ -477,6 +486,7 @@ int main(int argc, char **argv) {
         }
         ma_line.markers.push_back(m_line);
         pubBTC.publish(ma_line);
+        pubAlignedBTC.publish(ma_line);
 
         // 
         if (pose_id > 0) {

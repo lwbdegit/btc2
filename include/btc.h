@@ -239,6 +239,9 @@ bool plane_greater_sort(std::shared_ptr<Plane> plane1,
 
 void publish_std(const std::vector<std::pair<BTC, BTC>> &match_std_list,
                  const Eigen::Matrix4d &transform1,
+                 const ros::Publisher &std_publisher, bool pub_source);
+void publish_std_pair(const std::vector<std::pair<BTC, BTC>> &match_std_list,
+                 const Eigen::Matrix4d &transform1,
                  const Eigen::Matrix4d &transform2,
                  const ros::Publisher &std_publisher);
 
