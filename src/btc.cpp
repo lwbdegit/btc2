@@ -269,6 +269,7 @@ void publish_std_list(const std::vector<BTC> &btc_list,
   ma_line.markers.clear();
 }
 
+// 给每个三角形描述子三条边画线
 void publish_std(const std::vector<std::pair<BTC, BTC>> &match_std_list,
                  const Eigen::Matrix4d &transform1,
                  const Eigen::Matrix4d &transform2,
@@ -285,12 +286,13 @@ void publish_std(const std::vector<std::pair<BTC, BTC>> &match_std_list,
   m_line.pose.orientation.w = 1.0;
   m_line.header.frame_id = "camera_init";
   m_line.id = 0;
-  int max_pub_cnt = 1;
+  const int max_pub_cnt = 100;
+  int pub_cnt = 1;
   for (auto var : match_std_list) {
-    if (max_pub_cnt > 100) {
+    if (pub_cnt > max_pub_cnt) {
       break;
     }
-    max_pub_cnt++;
+    pub_cnt++;
     m_line.color.a = 0.8;
     m_line.points.clear();
     // m_line.color.r = 0 / 255;
@@ -416,7 +418,7 @@ void publish_std(const std::vector<std::pair<BTC, BTC>> &match_std_list,
     //           << std::endl;
     // getchar();
   }
-  for (int j = 0; j < 100 * 6; j++) {
+  for (int j = 0; j < max_pub_cnt * 6; j++) {
     m_line.color.a = 0.00;
     ma_line.markers.push_back(m_line);
     m_line.id++;
@@ -589,7 +591,7 @@ void BtcDescManager::SearchLoop(
     std::pair<Eigen::Vector3d, Eigen::Matrix3d> &loop_transform,
     std::vector<std::pair<BTC, BTC>> &loop_std_pair) {
   if (btcs_vec.size() == 0) {
-    ROS_ERROR_STREAM("No STDescs!");
+    ROS_ERROR_STREAM("No STDescs! return");
     loop_result = std::pair<int, double>(-1, 0);
     return;
   }
@@ -612,8 +614,8 @@ void BtcDescManager::SearchLoop(
     candidate_verify(candidate_matcher_vec[i], verify_score, relative_pose,
                      sucess_match_vec);
     if (print_debug_info_) {
-      std::cout << "[Retrieval] try frame:"
-                << candidate_matcher_vec[i].match_id_.second << ", rough size:"
+      std::cout << "[Retrieval] try frame: "
+                << candidate_matcher_vec[i].match_id_.second << ", rough size: "
                 << candidate_matcher_vec[i].match_list_.size()
                 << ", score:" << verify_score << std::endl;
     }
@@ -631,8 +633,8 @@ void BtcDescManager::SearchLoop(
   auto t3 = std::chrono::high_resolution_clock::now();
 
   if (print_debug_info_) {
-    std::cout << "[Retrieval] best candidate:" << best_candidate_id
-              << ", score:" << best_score << std::endl;
+    std::cout << "[Retrieval] best candidate: " << best_candidate_id
+              << ", score: " << best_score << std::endl;
     std::cout << "[Retrieval][Time] candidate selector: " << time_inc(t2, t1)
               << " ms, candidate verify: " << time_inc(t3, t2) << "ms"
               << std::endl;
@@ -1741,6 +1743,8 @@ void BtcDescManager::candidate_verify(
     std::pair<Eigen::Vector3d, Eigen::Matrix3d> &relative_pose,
     std::vector<std::pair<BTC, BTC>> &sucess_match_list) {
   sucess_match_list.clear();
+
+  // 1.RANSAC
   double dis_threshold = 3; // TODO: 设为可配置参数
   std::time_t solve_time = 0;
   std::time_t verify_time = 0;
@@ -1795,6 +1799,8 @@ void BtcDescManager::candidate_verify(
       max_vote = vote_list[i];
     }
   }
+
+  // 2. plane_geometric_verify
   // old 4 TODO: 设为可配置参数
   if (max_vote >= 4) {
     auto best_pair = candidate_matcher.match_list_[max_vote_index * skip_len];
@@ -1850,6 +1856,7 @@ void BtcDescManager::triangle_solver(std::pair<BTC, BTC> &std_pair,
   Eigen::Matrix3d U = svd.matrixU();
   rot = V * U.transpose();
   if (rot.determinant() < 0) {
+    // 将反射矩阵变为旋转矩阵
     Eigen::Matrix3d K;
     K << 1, 0, 0, 0, 1, 0, 0, 0, -1;
     rot = V * K * U.transpose();

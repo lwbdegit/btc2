@@ -11,6 +11,8 @@
 #include <signal.h>
 #include <thread>
 
+#include <pcl/common/transforms.h>
+
 #include "include/btc.h"
 #include "include/utils.h"
 
@@ -56,6 +58,9 @@ int main(int argc, char **argv) {
       nh.advertise<sensor_msgs::PointCloud2>("/cloud_all_plane", 100);
   ros::Publisher pubProjPlane =
       nh.advertise<sensor_msgs::PointCloud2>("/cloud_proj_plane", 100);
+
+  ros::Publisher pubAlignedSource =
+      nh.advertise<sensor_msgs::PointCloud2>("/aligned_source", 100);
 
   ros::Publisher pubCurrentPose =
       nh.advertise<nav_msgs::Odometry>("/current_pose", 10);
@@ -214,11 +219,6 @@ int main(int argc, char **argv) {
         btc_manager->SearchLoop(btcs_vec, search_result, loop_transform,
                                 loop_std_pair);
       }
-      if (search_result.first > 0) {
-        std::cout << "[Node][Loop Detection] triggle loop: " << localmap_id << "--"
-                  << search_result.first << ", score:" << search_result.second
-                  << std::endl;
-      }
       auto t_query_end = std::chrono::high_resolution_clock::now();
       querying_time.push_back(time_inc(t_query_end, t_query_begin));
 
@@ -247,6 +247,19 @@ int main(int argc, char **argv) {
       pcl::toROSMsg(localmap_cloud, pub_cloud);
       pub_cloud.header.frame_id = "camera_init";
       pubCurrentCloud.publish(pub_cloud);
+
+      // publish aligned source cloud
+      pcl::PointCloud<pcl::PointXYZI> aligned_localmap_cloud;
+      Eigen::Matrix4d transform = Eigen::Matrix4d::Identity();
+      if (search_result.first > 0) {
+        transform.block<3, 3>(0, 0) = loop_transform.second; // T_source_target
+        transform.block<3, 1>(0, 3) = loop_transform.first;
+        pcl::transformPointCloud(localmap_cloud, aligned_localmap_cloud,
+                                 Eigen::Matrix4d(transform.inverse()));
+      }
+      pcl::toROSMsg(aligned_localmap_cloud, pub_cloud);
+      pub_cloud.header.frame_id = "camera_init";
+      pubAlignedSource.publish(pub_cloud);
 
       // publish current frame whole plane
       pcl::PointCloud<pcl::PointXYZINormal> plane_normal_cloud;
@@ -277,7 +290,7 @@ int main(int argc, char **argv) {
 
       // publish hitorical plane
 
-      // publish projection planes
+      // publish current projection planes
       pcl::PointCloud<pcl::PointXYZINormal> proj_plane_normal_cloud;
       if (btc_manager->proj_plane_->size()) {
         int num = 5;
@@ -328,7 +341,9 @@ int main(int argc, char **argv) {
       }
       std::cout<<"[Node]currnet binary size: " << key_points_cloud.size();
       // publish all BTC descriptor points
-      key_points_cloud.clear();
+      pcl::PointCloud<pcl::PointXYZI> database_key_points_cloud;
+      database_key_points_cloud.reserve(
+          btc_manager->history_binary_list_.size());
       for (auto binray : btc_manager->history_binary_list_) {
         for (auto var : binray) {
           pcl::PointXYZI pi;
@@ -336,15 +351,33 @@ int main(int argc, char **argv) {
           pi.y = var.location_[1];
           pi.z = var.location_[2];
           pi.intensity = var.summary_;
-          key_points_cloud.push_back(pi);
+          database_key_points_cloud.push_back(pi);
         }
       }
-      if (key_points_cloud.size()) {
-        pcl::toROSMsg(key_points_cloud, pub_cloud);
+      if (database_key_points_cloud.size()) {
+        pcl::toROSMsg(database_key_points_cloud, pub_cloud);
         pub_cloud.header.frame_id = "camera_init";
         pubAllBinary.publish(pub_cloud);
       }
-      std::cout<<", all binary size: " << key_points_cloud.size()<<std::endl;
+      std::cout<<", database binary size: " << database_key_points_cloud.size()<<std::endl;
+
+      // print loop result
+      if (search_result.first > 0) {
+        LINFO << "[Node][Loop Detection] detected loop pair: " << localmap_id
+              << "--" << search_result.first
+              << ", [plane_geometric_verify] overlap score:"
+              << search_result.second << std::endl;
+        LDEBUG << "source -- id: " << localmap_id
+               << ", size: " << localmap_cloud.size()
+               << ", feat size: " << key_points_cloud.size() << REND;
+        LDEBUG << "target -- id: " << search_result.first << ", size: "
+               << btc_manager->key_cloud_vec_[search_result.first]->size()
+               << ", feat size: "
+               << btc_manager->history_binary_list_[search_result.first].size()
+               << REND;
+      } else {
+        LERROR << "[Node][Loop Detection] no loop detected" << REND;
+      }
 
       // publish pair
       visualization_msgs::MarkerArray marker_array;
@@ -360,7 +393,6 @@ int main(int argc, char **argv) {
         Eigen::Matrix4d transform1 = Eigen::Matrix4d::Identity();
         Eigen::Matrix4d transform2 = Eigen::Matrix4d::Identity();
         publish_std(loop_std_pair, transform1, transform2, pubBTC);
-        slow_loop.sleep();
 
         // publish matched key points
         pcl::PointCloud<pcl::PointXYZI> match_key_points_cloud;
@@ -409,6 +441,9 @@ int main(int argc, char **argv) {
           }
           marker.scale.x = scale_fp;
           marker.color = color_fp;
+          // sleep for visualization
+          if (btc_manager->print_debug_info_)
+            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
         }
         // puslish matched cloud rgb
         pcl::toROSMsg(matched_cloud_rgb, pub_cloud);
