@@ -1849,6 +1849,12 @@ void BtcDescManager::triangle_solver(std::pair<BTC, BTC> &std_pair,
   ref.col(0) = std_pair.second.binary_A_.location_ - std_pair.second.center_;
   ref.col(1) = std_pair.second.binary_B_.location_ - std_pair.second.center_;
   ref.col(2) = std_pair.second.binary_C_.location_ - std_pair.second.center_;
+
+  // T_Q_P (trans cloud P to Q)
+  // Q*P = UAV^T, R=U*V^T, t=center_q- R*center_p, where P means source, Q means target
+  // R is rotation matrix, t is translation vector
+
+  // T_source_target (trans target cloud to source)
   Eigen::Matrix3d covariance = src * ref.transpose();
   Eigen::JacobiSVD<Eigen::MatrixXd> svd(
       covariance, Eigen::ComputeThinU | Eigen::ComputeThinV);
@@ -1861,7 +1867,7 @@ void BtcDescManager::triangle_solver(std::pair<BTC, BTC> &std_pair,
     K << 1, 0, 0, 0, 1, 0, 0, 0, -1;
     rot = V * K * U.transpose();
   }
-  t = -rot * std_pair.first.center_ + std_pair.second.center_;
+  t = -rot * std_pair.second.center_ + std_pair.first.center_;
 }
 
 double BtcDescManager::plane_geometric_verify(
