@@ -578,6 +578,9 @@ void BtcDescManager::GenerateBtcDescs(
   for (auto iter = voxel_map.begin(); iter != voxel_map.end(); iter++) {
     delete (iter->second);
   }
+
+  // debug
+  proj_plane_ = std::make_shared<std::vector<std::shared_ptr<Plane>>>(merge_plane_list);
   return;
 }
 
@@ -594,8 +597,8 @@ void BtcDescManager::SearchLoop(
   auto t1 = std::chrono::high_resolution_clock::now();
   std::vector<BTCMatchList> candidate_matcher_vec;
   candidate_selector(btcs_vec, candidate_matcher_vec);
-
   auto t2 = std::chrono::high_resolution_clock::now();
+
   // step2, select best candidates from rough candidates
   double best_score = 0;
   int best_candidate_id = -1;
@@ -609,7 +612,7 @@ void BtcDescManager::SearchLoop(
     candidate_verify(candidate_matcher_vec[i], verify_score, relative_pose,
                      sucess_match_vec);
     if (print_debug_info_) {
-      std::cout << "[Retreival] try frame:"
+      std::cout << "[Retrieval] try frame:"
                 << candidate_matcher_vec[i].match_id_.second << ", rough size:"
                 << candidate_matcher_vec[i].match_list_.size()
                 << ", score:" << verify_score << std::endl;
@@ -621,19 +624,21 @@ void BtcDescManager::SearchLoop(
       best_transform = relative_pose;
       best_sucess_match_vec = sucess_match_vec;
       triggle_candidate = i;
-      // std::cout << "[Retreival] best candidate:" << best_candidate_id
+      // std::cout << "[Retrieval] best candidate:" << best_candidate_id
       //           << ", score:" << best_score << std::endl;
     }
   }
   auto t3 = std::chrono::high_resolution_clock::now();
 
-  // std::cout << "[Time] candidate selector: " << time_inc(t2, t1)
-  //           << " ms, candidate verify: " << time_inc(t3, t2) << "ms"
-  //           << std::endl;
   if (print_debug_info_) {
-    std::cout << "[Retreival] best candidate:" << best_candidate_id
+    std::cout << "[Retrieval] best candidate:" << best_candidate_id
               << ", score:" << best_score << std::endl;
+    std::cout << "[Retrieval][Time] candidate selector: " << time_inc(t2, t1)
+              << " ms, candidate verify: " << time_inc(t3, t2) << "ms"
+              << std::endl;
   }
+
+  // TODO: 额外验证条件 1.最优和次优接近（位姿、打分、有效点数等） 2.位姿变化是否过大 3.与上次回环结果比较接近
 
   if (best_score > config_setting_.icp_threshold_) {
     loop_result = std::pair<int, double>(best_candidate_id, best_score);
@@ -1050,7 +1055,7 @@ void BtcDescManager::binary_extractor(
     if ((proj_normal - last_normal).norm() < 0.3 ||
         (proj_normal + last_normal).norm() > 0.3) {
       last_normal = proj_normal;
-      std::cout << "[Description] reference plane normal:"
+      std::cout << "[Description][binary_extractor]reference plane normal:"
                 << proj_normal.transpose()
                 << ", center:" << proj_center.transpose() << std::endl;
       useful_proj_num++;
@@ -1736,10 +1741,10 @@ void BtcDescManager::candidate_verify(
     std::pair<Eigen::Vector3d, Eigen::Matrix3d> &relative_pose,
     std::vector<std::pair<BTC, BTC>> &sucess_match_list) {
   sucess_match_list.clear();
-  double dis_threshold = 3;
+  double dis_threshold = 3; // TODO: 设为可配置参数
   std::time_t solve_time = 0;
   std::time_t verify_time = 0;
-  int skip_len = (int)(candidate_matcher.match_list_.size() / 50) + 1;
+  int skip_len = (int)(candidate_matcher.match_list_.size() / 50) + 1; // TODO: 设为可配置参数
   int use_size = candidate_matcher.match_list_.size() / skip_len;
   std::vector<size_t> index(use_size);
   std::vector<int> vote_list(use_size);
@@ -1756,6 +1761,7 @@ void BtcDescManager::candidate_verify(
         Eigen::Matrix3d test_rot;
         Eigen::Vector3d test_t;
         triangle_solver(single_pair, test_t, test_rot);
+        // FIXME: 这里可以优化， 局部变量太多
         for (size_t j = 0; j < candidate_matcher.match_list_.size(); j++) {
           auto verify_pair = candidate_matcher.match_list_[j];
           Eigen::Vector3d A = verify_pair.first.binary_A_.location_;
@@ -1775,6 +1781,7 @@ void BtcDescManager::candidate_verify(
             vote++;
           }
         }
+        // FIXME: 没必要加锁
         mylock.lock();
         vote_list[i] = vote;
         mylock.unlock();
@@ -1788,12 +1795,13 @@ void BtcDescManager::candidate_verify(
       max_vote = vote_list[i];
     }
   }
-  // old 4
+  // old 4 TODO: 设为可配置参数
   if (max_vote >= 4) {
     auto best_pair = candidate_matcher.match_list_[max_vote_index * skip_len];
     int vote = 0;
     Eigen::Matrix3d best_rot;
     Eigen::Vector3d best_t;
+    // TODO: 避免再求一次， 空间换时间？ 下面代码都可优化掉
     triangle_solver(best_pair, best_t, best_rot);
     relative_pose.first = best_t;
     relative_pose.second = best_rot;

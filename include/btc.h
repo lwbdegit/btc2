@@ -22,6 +22,24 @@
 #include <string>
 #include <unordered_map>
 
+// debug
+#include "utils.h"
+// RS debug
+#define RSRESET "\033[0m"
+#define RSBOLDRED "\033[1m\033[31m"     /* Bold Red */
+#define RSBOLDGREEN "\033[1m\033[32m"   /* Bold Green */
+#define RSBOLDYELLOW "\033[1m\033[33m"  /* Bold Yellow */
+#define RSBOLDMAGENTA "\033[1m\033[35m" /* Bold Magenta */
+#define RSBOLDCYAN "\033[1m\033[36m"    /* Bold Cyan */
+#define LINFO (std::cout << RSBOLDGREEN)
+#define LWARNING (std::cout << RSBOLDYELLOW)
+#define LERROR (std::cout << RSBOLDRED)
+#define LDEBUG (std::cout << RSBOLDCYAN)
+#define LTITLE (std::cout << RSBOLDMAGENTA)
+#define END (std::endl)
+#define REND "\033[0m" << std::endl
+#define PRINT printf
+
 #define HASH_P 116101
 #define MAX_N 10000000000
 
@@ -306,6 +324,10 @@ class BtcDescManager {
 
   // save all planes of key frame, required
   std::vector<pcl::PointCloud<pcl::PointXYZINormal>::Ptr> plane_cloud_vec_;
+
+  /*debug*/
+  // current proj plane
+  std::shared_ptr<std::vector<std::shared_ptr<Plane>>> proj_plane_;
 
   /*Three main processing functions*/
 
