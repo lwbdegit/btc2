@@ -74,6 +74,8 @@ int main(int argc, char **argv) {
       nh.advertise<visualization_msgs::MarkerArray>("/aligned_BTC_line", 10);
   ros::Publisher pubBTCList =
       nh.advertise<visualization_msgs::MarkerArray>("descriptor_line_list", 10);
+  ros::Publisher pubBTCCloud =
+      nh.advertise<sensor_msgs::PointCloud2>("/BTC_pair_cloud", 100);
 
   // Pose
   ros::Publisher pubCurrentPose =
@@ -377,7 +379,8 @@ int main(int argc, char **argv) {
       } else {
         ROS_ERROR_STREAM("key_points_cloud is empty!");
       }
-      std::cout<<"[Node]currnet binary size: " << key_points_cloud.size();
+      std::cout << "[Node]currnet binary size: " << key_points_cloud.size();
+
       // publish all BTC descriptor points
       pcl::PointCloud<pcl::PointXYZI> database_key_points_cloud;
       database_key_points_cloud.reserve(
@@ -519,6 +522,24 @@ int main(int argc, char **argv) {
         publish_std_pair(loop_std_pair, transform1, transform2, pubBTC, rgb);
         // publish aligned source BTC
         publish_std(loop_std_pair, T_target_source, pubAlignedBTC, true);
+        pcl::PointCloud<pcl::PointXYZRGB> BTC_pari_cloud;
+        auto& std_pair_vec = btc_manager->loop_res_->sol_res_->std_pair_vec_;
+        for(auto& std_pair : std_pair_vec){
+          pcl::PointXYZRGB pi;
+          pi.x = std_pair.first.center_.x();
+          pi.y = std_pair.first.center_.y();
+          pi.z = std_pair.first.center_.z();
+          pi.r = pi.g = pi.b = 255;
+          BTC_pari_cloud.push_back(pi);
+          pi.x = std_pair.second.center_.x();
+          pi.y = std_pair.second.center_.y();
+          pi.z = std_pair.second.center_.z();
+          pi.r = pi.g = pi.b = 128;
+          BTC_pari_cloud.push_back(pi);
+        }
+        pcl::toROSMsg(BTC_pari_cloud, pub_cloud);
+        pub_cloud.header.frame_id = "camera_init";
+        pubBTCCloud.publish(pub_cloud);
 
         if (cloud_overlap < cloud_overlap_thr) {
           // sleep for visualization

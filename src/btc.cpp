@@ -294,7 +294,15 @@ void publish_std(const std::vector<std::pair<BTC, BTC>> &match_std_list,
     pub_cnt++;
     m_line.color.a = 0.8;
     m_line.points.clear();
-
+    
+    // 用于求解位姿的BTC
+    if (var.second.match_frame_number_ == var.first.frame_number_) {
+      m_line.scale.x = 0.3;
+      m_line.color.a = 1;
+    } else {
+      m_line.scale.x = 0.15;
+      m_line.color.a = 0.5;
+    }
     m_line.color.r = 0.0 / 255;
     m_line.color.g = 0.0 / 255;
     m_line.color.b = 255.0 / 255;
@@ -368,7 +376,8 @@ void publish_std(const std::vector<std::pair<BTC, BTC>> &match_std_list,
 void publish_std_pair(const std::vector<std::pair<BTC, BTC>> &match_std_list,
                       const Eigen::Matrix4d &transform1,
                       const Eigen::Matrix4d &transform2,
-                      const ros::Publisher &std_publisher) {
+                      const ros::Publisher &std_publisher,
+                      const Eigen::Vector3d& rgb) {
   // publish descriptor
   // bool transform_enable = true;
   visualization_msgs::MarkerArray ma_line;
@@ -388,15 +397,19 @@ void publish_std_pair(const std::vector<std::pair<BTC, BTC>> &match_std_list,
       break;
     }
     pub_cnt++;
-    m_line.color.a = 0.8;
     m_line.points.clear();
     // target triangle
-    // m_line.color.r = 0 / 255;
-    // m_line.color.g = 233.0 / 255;
-    // m_line.color.b = 0 / 255;
-    m_line.color.r = 252.0 / 255;
-    m_line.color.g = 233.0 / 255;
-    m_line.color.b = 79.0 / 255;
+    // 用于求解位姿的BTC
+    if (var.second.match_frame_number_ == var.first.frame_number_) {
+      m_line.scale.x = 0.3;
+      m_line.color.a = 1;
+    } else {
+      m_line.scale.x = 0.15;
+      m_line.color.a = 0.5;
+    }
+    m_line.color.r = rgb(0) / 255;
+    m_line.color.g = rgb(1) / 255;
+    m_line.color.b = rgb(2) / 255;
     geometry_msgs::Point p;
     Eigen::Vector3d t_p;
     t_p = var.second.binary_A_.location_;
@@ -449,17 +462,11 @@ void publish_std_pair(const std::vector<std::pair<BTC, BTC>> &match_std_list,
     ma_line.markers.push_back(m_line);
     m_line.id++;
     m_line.points.clear();
-    // another
-    m_line.points.clear();
-    // 252; 233; 79
 
     // source triangle
     m_line.color.r = 1;
     m_line.color.g = 1;
     m_line.color.b = 1;
-    // m_line.color.r = 252.0 / 255;
-    // m_line.color.g = 233.0 / 255;
-    // m_line.color.b = 79.0 / 255;
     t_p = var.first.binary_A_.location_;
     t_p = transform1.block<3, 3>(0, 0) * t_p + transform1.block<3, 1>(0, 3);
     p.x = t_p[0];
@@ -641,14 +648,14 @@ void BtcDescManager::GenerateBtcDescs(
   std::vector<std::shared_ptr<Plane>> merge_plane_list;
   get_project_plane(voxel_map, proj_plane_list);
   if (proj_plane_list.size() == 0) {
-    // TODO: need better solution
+    // TODO(rum): need better solution
     std::shared_ptr<Plane> single_plane(new Plane);
     single_plane->normal_ << 0, 0, 1;
     single_plane->center_ << input_cloud->points[0].x, input_cloud->points[0].y,
         input_cloud->points[0].z;
     merge_plane_list.push_back(single_plane);
   } else {
-    // TODO: not understood
+    // TODO(rum): not understood
     sort(proj_plane_list.begin(), proj_plane_list.end(), plane_greater_sort);
     merge_plane(proj_plane_list, merge_plane_list);
     sort(merge_plane_list.begin(), merge_plane_list.end(), plane_greater_sort);
@@ -737,16 +744,14 @@ void BtcDescManager::SearchLoop(
               << std::endl;
   }
 
-  // TODO: 额外验证条件 1.最优和次优接近（位姿、打分、有效点数等） 2.位姿变化是否过大 3.与上次回环结果比较接近
+  // TODO(rum): 额外验证条件 1.最优和次优接近（位姿、打分、有效点数等） 2.位姿变化是否过大 3.与上次回环结果比较接近
 
   if (best_score > config_setting_.icp_threshold_) {
     loop_result = std::pair<int, double>(best_candidate_id, best_score);
     loop_transform = best_transform;
     loop_std_pair = best_sucess_match_vec;
-    return;
   } else {
     loop_result = std::pair<int, double>(-1, 0);
-    return;
   }
 }
 
@@ -888,9 +893,13 @@ void BtcDescManager::init_voxel_map(
     iter_list.push_back(iter);
     // iter->second->init_octo_tree();
   }
-  // FIXME: bool字段并行有风险
+  // FIXME(rum): bool字段并行有风险
   std::for_each(
+#if ENABLE_PARALELL_FOR_LOOP
       std::execution::par_unseq, index.begin(), index.end(),
+#else
+      std::execution::seq, index.begin(), index.end(),
+#endif
       [&](const size_t &i) { iter_list[i]->second->init_octo_tree(); });
 }
 
@@ -1234,7 +1243,7 @@ void BtcDescManager::extract_binary(
     if (dis < dis_threshold_min || dis > dis_threshold_max) {
       continue;
     } else {
-      // FIXME: double check
+      // FIXME(rum): double check
       if (dis > dis_threshold_min && dis <= dis_threshold_max) {
         pi.x = x;
         pi.y = y;
@@ -1709,12 +1718,18 @@ void BtcDescManager::candidate_selector(
   int query_num = 0;
   int pass_num = 0;
   std::for_each(
+#if ENABLE_PARALELL_FOR_LOOP
       std::execution::par_unseq, index.begin(), index.end(),
+#else
+      std::execution::seq, index.begin(), index.end(),
+#endif
       [&](const size_t &i) {
         BTC descriptor = current_STD_list[i];
         BTC_LOC position;
         int best_index = 0;
         BTC_LOC best_position;
+
+        // TODO(rum): 没有几何意义 A+B+C?
         double dis_threshold =
             descriptor.triangle_.norm() *
             config_setting_.rough_dis_threshold_;  // old 0.005
@@ -1733,10 +1748,12 @@ void BtcDescManager::candidate_selector(
                 if ((descriptor.frame_number_ -
                      data_base_[position][j].frame_number_) >
                     config_setting_.skip_near_num_) {
+                  // 边长相似度
                   double dis =
                       (descriptor.triangle_ - data_base_[position][j].triangle_)
                           .norm();
                   if (dis < dis_threshold) {
+                    // 特征相似度
                     double similarity =
                         (binary_similarity(descriptor.binary_A_,
                                            data_base_[position][j].binary_A_) +
@@ -1777,8 +1794,12 @@ void BtcDescManager::candidate_selector(
   }
   bool multi_thread_en = false;
   if (multi_thread_en) {
-    std::for_each(
-        std::execution::par_unseq, index.begin(), index.end(),
+  std::for_each(
+#if ENABLE_PARALELL_FOR_LOOP
+      std::execution::par_unseq, index.begin(), index.end(),
+#else
+      std::execution::seq, index.begin(), index.end(),
+#endif
         [&](const size_t &i) {
           if (useful_match[i]) {
             std::pair<BTC, BTC> single_match_pair;
@@ -1833,19 +1854,27 @@ void BtcDescManager::candidate_selector(
       candidate_matcher_vec.push_back(match_triangle_list);
     }
   }
+  // TODO(rum): 是否对候选排序，便于RANSAC取到约束强的点对
 }
 
 void BtcDescManager::candidate_verify(
-    const BTCMatchList &candidate_matcher, double &verify_score,
+    BTCMatchList &candidate_matcher, double &verify_score,
     std::pair<Eigen::Vector3d, Eigen::Matrix3d> &relative_pose,
     std::vector<std::pair<BTC, BTC>> &sucess_match_list) {
   sucess_match_list.clear();
 
+  int pair_size = candidate_matcher.match_list_.size();
+  if (pair_size < 3) {
+    LERROR << "[candidate_verify] pair_size < 3" << REND;
+    verify_score = -1;
+    return;
+  }
+
   // 1.RANSAC
-  double dis_threshold = 3; // TODO: 设为可配置参数
+  double dis_threshold = 3; // TODO(rum): 设为可配置参数
   std::time_t solve_time = 0;
   std::time_t verify_time = 0;
-  int skip_len = (int)(candidate_matcher.match_list_.size() / 50) + 1; // TODO: 设为可配置参数
+  int skip_len = (int)(candidate_matcher.match_list_.size() / 50) + 1; // TODO(rum): 设为可配置参数 减少
   int use_size = candidate_matcher.match_list_.size() / skip_len;
   std::vector<size_t> index(use_size);
   std::vector<int> vote_list(use_size);
@@ -1854,35 +1883,62 @@ void BtcDescManager::candidate_verify(
   }
   std::mutex mylock;
   auto t0 = std::chrono::high_resolution_clock::now();
+
   std::for_each(
-      std::execution::par_unseq, index.begin(), index.end(),
+#if ENABLE_PARALELL_FOR_LOOP
+      std::execution::par_unseq index.begin(), index.end(),
+#else
+      std::execution::seq, index.begin(), index.end(),
+#endif
       [&](const size_t &i) {
-        auto single_pair = candidate_matcher.match_list_[i * skip_len];
-        int vote = 0;
         Eigen::Matrix3d test_rot;
         Eigen::Vector3d test_t;
+#if SOLVE_ONLY_ONE_PAIR
+        int index = i * skip_len;
+        auto& single_pair = candidate_matcher.match_list_[index];
         triangle_solver(single_pair, test_t, test_rot);
-        // FIXME: 这里可以优化， 局部变量太多
-        for (size_t j = 0; j < candidate_matcher.match_list_.size(); j++) {
-          auto verify_pair = candidate_matcher.match_list_[j];
-          Eigen::Vector3d A = verify_pair.first.binary_A_.location_;
-          Eigen::Vector3d A_transform = test_rot * A + test_t;
-          Eigen::Vector3d B = verify_pair.first.binary_B_.location_;
-          Eigen::Vector3d B_transform = test_rot * B + test_t;
-          Eigen::Vector3d C = verify_pair.first.binary_C_.location_;
-          Eigen::Vector3d C_transform = test_rot * C + test_t;
-          double dis_A =
-              (A_transform - verify_pair.second.binary_A_.location_).norm();
-          double dis_B =
-              (B_transform - verify_pair.second.binary_B_.location_).norm();
-          double dis_C =
-              (C_transform - verify_pair.second.binary_C_.location_).norm();
+#else
+        int index = i * skip_len;
+        int index2 = index + 1;
+        int index3 = index + 2;
+        if (index3 >= pair_size) {
+          index2 = index - 1;
+          index3 = index - 2;
+        }
+        const auto &single_pair = candidate_matcher.match_list_[index];
+        const auto &single_pair2 = candidate_matcher.match_list_[index2];
+        const auto &single_pair3 = candidate_matcher.match_list_[index3];
+        std::vector<std::pair<BTC, BTC>> std_pair_vec;
+        std_pair_vec.push_back(single_pair);
+        std_pair_vec.push_back(single_pair2);
+        std_pair_vec.push_back(single_pair3);
+        triangle_solver(std_pair_vec, test_t, test_rot, nullptr);
+#endif
+        // 投票
+        // FIXME(rum): 这里可以优化， 局部变量太多
+        int vote = 0;
+        Eigen::Vector3d A, A_transform, B, B_transform, C, C_transform;
+        double dis_A, dis_B, dis_C;
+        for (size_t j = 0; j < pair_size; j++) {
+          const auto& verify_pair = candidate_matcher.match_list_[j];
+          A = verify_pair.first.binary_A_.location_;
+          A_transform = test_rot * A + test_t;
+          B = verify_pair.first.binary_B_.location_;
+          B_transform = test_rot * B + test_t;
+          C = verify_pair.first.binary_C_.location_;
+          C_transform = test_rot * C + test_t;
+          dis_A = (A_transform - verify_pair.second.binary_A_.location_).norm();
+          dis_B = (B_transform - verify_pair.second.binary_B_.location_).norm();
+          dis_C = (C_transform - verify_pair.second.binary_C_.location_).norm();
           if (dis_A < dis_threshold && dis_B < dis_threshold &&
               dis_C < dis_threshold) {
             vote++;
           }
         }
-        // FIXME: 没必要加锁
+        // TODO(rum): 内点特征再匹配，或者点云ICP， 计算更准的位姿
+    
+
+        // FIXME(rum): 没必要加锁
         mylock.lock();
         vote_list[i] = vote;
         mylock.unlock();
@@ -1898,14 +1954,38 @@ void BtcDescManager::candidate_verify(
   }
 
   // 2. plane_geometric_verify
-  // old 4 TODO: 设为可配置参数
+  // old 4 TODO(rum): 设为可配置参数
   if (max_vote >= 4) {
-    auto best_pair = candidate_matcher.match_list_[max_vote_index * skip_len];
-    int vote = 0;
+    // TODO(rum): 避免再求一次， 空间换时间？ 下面代码都可优化掉
     Eigen::Matrix3d best_rot;
     Eigen::Vector3d best_t;
-    // TODO: 避免再求一次， 空间换时间？ 下面代码都可优化掉
+#if SOLVE_ONLY_ONE_PAIR
+    auto& best_pair = candidate_matcher.match_list_[max_vote_index * skip_len];
     triangle_solver(best_pair, best_t, best_rot);
+#else
+    int index = max_vote_index * skip_len;
+    int index2 = index + 1;
+    int index3 = index + 2;
+    if (index3 >= pair_size) {
+      index2 = index - 1;
+      index3 = index - 2;
+    }
+    auto& best_pair = candidate_matcher.match_list_[index];
+    auto& best_pair2 = candidate_matcher.match_list_[index2];
+    auto& best_pair3 = candidate_matcher.match_list_[index3];
+    std::vector<std::pair<BTC, BTC>> best_std_pair_vec;
+    best_std_pair_vec.push_back(best_pair);
+    best_std_pair_vec.push_back(best_pair2);
+    best_std_pair_vec.push_back(best_pair3);
+
+    // record the BTCs matched by current frame
+    best_pair.second.match_frame_number_ = best_pair.first.frame_number_;
+    best_pair2.second.match_frame_number_ = best_pair2.first.frame_number_;
+    best_pair3.second.match_frame_number_ = best_pair3.first.frame_number_;
+
+    std::shared_ptr<SolverResult> sol_res(new SolverResult);
+    triangle_solver(best_std_pair_vec, best_t, best_rot, sol_res);
+#endif
     relative_pose.first = best_t;
     relative_pose.second = best_rot;
     for (size_t j = 0; j < candidate_matcher.match_list_.size(); j++) {
@@ -1930,6 +2010,9 @@ void BtcDescManager::candidate_verify(
     verify_score = plane_geometric_verify(
         plane_cloud_vec_.back(),
         plane_cloud_vec_[candidate_matcher.match_id_.second], relative_pose);
+
+    //
+    loop_res_->sol_res_ = sol_res;
   } else {
     verify_score = -1;
   }
@@ -1965,6 +2048,97 @@ void BtcDescManager::triangle_solver(std::pair<BTC, BTC> &std_pair,
     rot = V * K * U.transpose();
   }
   t = -rot * std_pair.second.center_ + std_pair.first.center_;
+}
+
+bool IsEqual(const Eigen::Vector3d &v1, const Eigen::Vector3d &v2) {
+  double thresh = 1e-5;
+  return abs(v1.x() - v2.x() < thresh && abs(v1.y() - v2.y()) < thresh &&
+             abs(v1.z() - v2.z()) < thresh);
+}
+void BtcDescManager::triangle_solver(
+    std::vector<std::pair<BTC, BTC>> &std_pair_vec, Eigen::Vector3d &t,
+    Eigen::Matrix3d &rot, std::shared_ptr<SolverResult> solver_res) {
+  // 保持顶点唯一，避免加权
+  std::vector<Eigen::Vector3d> src_vec;
+  std::vector<Eigen::Vector3d> ref_vec;
+  bool new_A, new_B, new_C;
+  for (int i = 0; i < std_pair_vec.size(); ++i) {
+    const auto &pair = std_pair_vec[i];
+    new_A = new_B = new_C = true;
+    for (auto &src_point : src_vec) {
+      if (new_A && IsEqual(src_point, pair.first.binary_A_.location_)) {
+        new_A = false;
+      }
+      if (new_B && IsEqual(src_point, pair.first.binary_B_.location_)) {
+        new_B = false;
+      }
+      if (new_C && IsEqual(src_point, pair.first.binary_C_.location_)) {
+        new_C = false;
+      }
+    }
+    if(new_A) {
+      src_vec.push_back(pair.first.binary_A_.location_);
+      ref_vec.push_back(pair.second.binary_A_.location_);
+    }
+    if(new_B) {
+      src_vec.push_back(pair.first.binary_B_.location_);
+      ref_vec.push_back(pair.second.binary_B_.location_);
+    }
+    if(new_C) {
+      src_vec.push_back(pair.first.binary_C_.location_);
+      ref_vec.push_back(pair.second.binary_C_.location_);
+    }
+  }
+  if (src_vec.size() == 0)
+    LERROR << "src_vec.size() == 0" << REND;
+  else if (print_debug_info_) {
+  }
+
+  int cloud_size = src_vec.size();
+  Eigen::Vector3d center_src = Eigen::Vector3d::Zero();
+  Eigen::Vector3d center_ref = Eigen::Vector3d::Zero();
+  for (int i = 0; i < cloud_size; ++i) {
+    center_src += src_vec[i];
+    center_ref += ref_vec[i];
+  }
+  center_src /= cloud_size;
+  center_ref /= cloud_size;
+
+  Eigen::MatrixXd src;
+  Eigen::MatrixXd ref;
+  src.resize(3, cloud_size);
+  ref.resize(3, cloud_size);
+  for (int i = 0; i < cloud_size; ++i) {
+    src.col(i) = src_vec[i] - center_src;
+    ref.col(i) = ref_vec[i] - center_ref;
+  }
+  // T_Q_P (trans cloud P to Q)
+  // Q*P = UAV^T, R=U*V^T, t=center_q- R*center_p, where P means source, Q means target
+  // R is rotation matrix, t is translation vector
+
+  // T_source_target (trans target cloud to source)
+  Eigen::Matrix3d covariance = src * ref.transpose();
+  Eigen::JacobiSVD<Eigen::MatrixXd> svd(
+      covariance, Eigen::ComputeThinU | Eigen::ComputeThinV);
+  Eigen::Matrix3d V = svd.matrixV();
+  Eigen::Matrix3d U = svd.matrixU();
+  rot = V * U.transpose();
+  if (rot.determinant() < 0) {
+    // 将反射矩阵变为旋转矩阵
+    Eigen::Matrix3d K;
+    K << 1, 0, 0, 0, 1, 0, 0, 0, -1;
+    rot = V * K * U.transpose();
+  }
+  t = -rot * center_ref + center_src;
+
+  // result
+  if (solver_res != nullptr) {
+    solver_res->src_vec_ = src_vec;
+    solver_res->ref_vec_ = ref_vec;
+    solver_res->std_pair_vec_ = std_pair_vec;
+    solver_res->rot_ = rot;
+    solver_res->t_ = t;
+  }
 }
 
 double BtcDescManager::plane_geometric_verify(
@@ -2023,5 +2197,7 @@ double BtcDescManager::plane_geometric_verify(
       }
     }
   }
+
+  // TODO(rum): 点面ICP
   return useful_match / source_cloud->size();
 }

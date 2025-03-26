@@ -43,6 +43,9 @@
 #define HASH_P 116101
 #define MAX_N 10000000000
 
+#define SOLVE_ONLY_ONE_PAIR false // 用1个BTC求解
+#define ENABLE_PARALELL_FOR_LOOP false // 开启并行for循环
+
 typedef struct ConfigSetting {
   /* for submap process*/
   double cloud_ds_size_ = 0.25;
@@ -103,6 +106,7 @@ typedef struct BTC {
   BinaryDescriptor binary_A_;
   BinaryDescriptor binary_B_;
   BinaryDescriptor binary_C_;
+  unsigned short match_frame_number_;
 } BTC;
 
 typedef struct Plane {
@@ -241,9 +245,10 @@ void publish_std(const std::vector<std::pair<BTC, BTC>> &match_std_list,
                  const Eigen::Matrix4d &transform1,
                  const ros::Publisher &std_publisher, bool pub_source);
 void publish_std_pair(const std::vector<std::pair<BTC, BTC>> &match_std_list,
-                 const Eigen::Matrix4d &transform1,
-                 const Eigen::Matrix4d &transform2,
-                 const ros::Publisher &std_publisher);
+                      const Eigen::Matrix4d &transform1,
+                      const Eigen::Matrix4d &transform2,
+                      const ros::Publisher &std_publisher,
+                      const Eigen::Vector3d &rgb);
 
 void publish_std_list(const std::vector<BTC> &btc_list,
                       const ros::Publisher &std_publisher);
@@ -304,6 +309,33 @@ struct PlaneSolver {
   Eigen::Vector3d target_normal;
 };
 
+class SolverResult {
+public:
+  SolverResult() { ; };
+  std::vector<Eigen::Vector3d> src_vec_;
+  std::vector<Eigen::Vector3d> ref_vec_;
+  std::vector<std::pair<BTC, BTC>> std_pair_vec_;
+  Eigen::Vector3d t_;
+  Eigen::Matrix3d rot_;
+};
+
+class LoopResult {
+public:
+  LoopResult() { sol_res_.reset(new SolverResult()); };
+  // 
+  int frame_id_;
+
+  // candidate_selector
+
+  // candidate_verify
+  std::shared_ptr<SolverResult> sol_res_;
+
+  // final
+  std::pair<int, double> loop_result_;
+  std::pair<Eigen::Vector3d, Eigen::Matrix3d> loop_transform_;
+  std::vector<std::pair<BTC, BTC>> loop_std_pair_;
+};
+
 class BtcDescManager {
  public:
   BtcDescManager() = default;
@@ -311,7 +343,9 @@ class BtcDescManager {
   ConfigSetting config_setting_;
 
   BtcDescManager(ConfigSetting &config_setting)
-      : config_setting_(config_setting) {};
+      : config_setting_(config_setting) {
+    loop_res_.reset(new LoopResult());
+  };
 
   // if print debug info
   bool print_debug_info_ = false;
@@ -331,6 +365,7 @@ class BtcDescManager {
   /*debug*/
   // current proj plane
   std::shared_ptr<std::vector<std::shared_ptr<Plane>>> proj_plane_;
+  std::shared_ptr<LoopResult> loop_res_;
 
   /*Three main processing functions*/
 
@@ -397,13 +432,18 @@ class BtcDescManager {
 
   // Get the best candidate frame by geometry check
   void candidate_verify(
-      const BTCMatchList &candidate_matcher, double &verify_score,
+      BTCMatchList &candidate_matcher, double &verify_score,
       std::pair<Eigen::Vector3d, Eigen::Matrix3d> &relative_pose,
       std::vector<std::pair<BTC, BTC>> &sucess_match_vec);
 
   // Get the transform between a matched std pair
   void triangle_solver(std::pair<BTC, BTC> &std_pair, Eigen::Vector3d &t,
                        Eigen::Matrix3d &rot);
+
+  // Get the transform between some matched std pairs
+  void triangle_solver(std::vector<std::pair<BTC, BTC>> &std_pair_vec,
+                       Eigen::Vector3d &t, Eigen::Matrix3d &rot,
+                       std::shared_ptr<SolverResult> sol_res);
 
   // Geometrical verification by plane-to-plane icp threshold
   double plane_geometric_verify(
