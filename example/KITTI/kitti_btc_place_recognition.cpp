@@ -288,7 +288,8 @@ int main(int argc, char **argv) {
         triggle_loop_num++;
         Eigen::Matrix4d transform1 = Eigen::Matrix4d::Identity();
         Eigen::Matrix4d transform2 = Eigen::Matrix4d::Identity();
-        publish_std_pair(loop_std_pair, transform1, transform2, pubBTC);
+        Eigen::Vector3d rgb = Eigen::Vector3d(255, 255, 0);
+        publish_std_pair(loop_std_pair, transform1, transform2, pubBTC, rgb);
         slow_loop.sleep();
 
         // publish matched key points

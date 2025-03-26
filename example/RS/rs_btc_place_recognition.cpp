@@ -82,7 +82,7 @@ int main(int argc, char **argv) {
       nh.advertise<nav_msgs::Odometry>("/matched_pose", 10);
   ros::Publisher pubOdomAftMapped =
       nh.advertise<nav_msgs::Odometry>("/aft_mapped_to_init", 10);
-      
+
   std_msgs::ColorRGBA color_tp;
   std_msgs::ColorRGBA color_fp;
   std_msgs::ColorRGBA color_path;
@@ -182,6 +182,37 @@ int main(int argc, char **argv) {
         if (scan_used_num < num_localmap_need) {
           if (scan_used_num == 0) {
             localmap_cloud.clear();
+            {
+              // TODO: clean code
+              //=== clear rviz
+              // cloud
+              sensor_msgs::PointCloud2 pub_cloud;
+              pcl::PointCloud<pcl::PointXYZINormal> empty_cloud;
+              pcl::toROSMsg(empty_cloud, pub_cloud);
+              pub_cloud.header.frame_id = "camera_init";
+              pubMatchedBinary.publish(pub_cloud);
+              pcl::PointCloud<pcl::PointXYZRGB> empty_rgb_cloud;
+              pcl::toROSMsg(empty_rgb_cloud, pub_cloud);
+              pub_cloud.header.frame_id = "camera_init";
+              pubMatchedCloud.publish(pub_cloud);
+
+              // btc
+              visualization_msgs::MarkerArray ma_line;
+              visualization_msgs::Marker m_line;
+              m_line.type = visualization_msgs::Marker::LINE_LIST;
+              m_line.action = visualization_msgs::Marker::ADD;
+              m_line.ns = "lines";
+              m_line.header.frame_id = "camera_init";
+              m_line.id = 0;
+              for (int j = 0; j < 100 * 6; j++) {
+                m_line.color.a = 0.00;
+                ma_line.markers.push_back(m_line);
+                m_line.id++;
+              }
+              ma_line.markers.push_back(m_line);
+              pubBTC.publish(ma_line);
+              pubAlignedBTC.publish(ma_line);
+            }
           }
           localmap_cloud += transform_cloud;
           scan_used_num++;
@@ -383,7 +414,7 @@ int main(int argc, char **argv) {
                << btc_manager->history_binary_list_[search_result.first].size()
                << REND;
       } else {
-        LERROR << "[Node][Loop Detection] no loop detected" << REND;
+        LDEBUG << "[Node][Loop Detection] no loop detected" << REND;
       }
 
       visualization_msgs::MarkerArray marker_array;
@@ -396,12 +427,6 @@ int main(int argc, char **argv) {
       marker.pose.orientation.w = 1.0;
       if (search_result.first >= 0) {
         triggle_loop_num++;
-        // publish BTC pair
-        Eigen::Matrix4d transform1 = Eigen::Matrix4d::Identity();
-        Eigen::Matrix4d transform2 = Eigen::Matrix4d::Identity();
-        publish_std_pair(loop_std_pair, transform1, transform2, pubBTC);
-        // publish aligned source BTC
-        publish_std(loop_std_pair, T_target_source, pubAlignedBTC, true);
 
         // publish matched key points
         pcl::PointCloud<pcl::PointXYZI> match_key_points_cloud;
@@ -418,7 +443,6 @@ int main(int argc, char **argv) {
         pub_cloud.header.frame_id = "camera_init";
         pubMatchedBinary.publish(pub_cloud);
 
-        // true positive
         pcl::PointCloud<pcl::PointXYZI>::Ptr matcher_cloud =
             btc_manager->key_cloud_vec_[search_result.first];
         pcl::PointCloud<pcl::PointXYZRGB> matched_cloud_rgb;
@@ -433,9 +457,15 @@ int main(int argc, char **argv) {
         }
 
         // add cloud color
+        // double cloud_overlap =
+        //     calc_overlap(localmap_cloud.makeShared(), matcher_cloud, 0.5);
         double cloud_overlap =
-            calc_overlap(localmap_cloud.makeShared(), matcher_cloud, 0.5);
+            calc_overlap(localmap_cloud.makeShared(),
+                         aligned_localmap_cloud.makeShared(), 0.5);
+        // true positive
         if (cloud_overlap >= cloud_overlap_thr) {
+          LINFO << "[Node][calc_overlap] cloud_overlap: " << cloud_overlap
+                << " thresh: " << cloud_overlap_thr << REND;
           true_loop_num++;
           for (size_t i = 0; i < matched_cloud_size; i++) {
             auto &pi = matched_cloud_rgb.points[i];
@@ -443,22 +473,58 @@ int main(int argc, char **argv) {
           }
           marker.scale.x = scale_tp;
           marker.color = color_tp;
-        } else {
+        } else if(cloud_overlap < 0.5* cloud_overlap_thr){
+          LERROR << "[Node][calc_overlap] cloud_overlap: " << cloud_overlap
+                 << " thresh: " << cloud_overlap_thr << REND;
           for (size_t i = 0; i < matched_cloud_size; i++) {
             auto &pi = matched_cloud_rgb.points[i];
             pi.r = 255;
           }
           marker.scale.x = scale_fp;
           marker.color = color_fp;
-          // sleep for visualization
-          if (btc_manager->print_debug_info_)
-            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+        } else if(cloud_overlap < cloud_overlap_thr){
+          LWARNING << "[Node][calc_overlap] cloud_overlap: " << cloud_overlap
+                 << " thresh: " << cloud_overlap_thr << REND;
+          for (size_t i = 0; i < matched_cloud_size; i++) {
+            auto &pi = matched_cloud_rgb.points[i];
+            pi.r = 255;
+            pi.g = 255;
+            pi.b = 0;
+          }
+          marker.scale.x = scale_fp;
+          marker.color = color_fp;   
         }
         // puslish matched cloud rgb
         pcl::toROSMsg(matched_cloud_rgb, pub_cloud);
         pub_cloud.header.frame_id = "camera_init";
         pubMatchedCloud.publish(pub_cloud);
 
+        // publish BTC pair
+        // <0.5 红，0.5-1 黄，1-1.5 绿，>1.5 蓝
+        Eigen::Vector3d rgb;
+        double good_overlap = 1.5 * cloud_overlap_thr;
+        good_overlap = std::min(good_overlap, 0.8);
+        if (cloud_overlap > good_overlap) {
+          rgb = Eigen::Vector3d(0.0, 255.0, 255.0);
+        } else if (cloud_overlap >= cloud_overlap_thr) {
+          rgb = Eigen::Vector3d(0.0, 255.0, 0.0);
+        } else if (cloud_overlap >= 0.5 * cloud_overlap_thr) {
+          rgb = Eigen::Vector3d(255.0, 255.0, 0.0);
+        } else {
+          LERROR<<"rgb cloud_overlap: " << cloud_overlap<<REND;
+          rgb = Eigen::Vector3d(255.0, 0.0, 0.0);
+        }
+        Eigen::Matrix4d transform1 = Eigen::Matrix4d::Identity();
+        Eigen::Matrix4d transform2 = Eigen::Matrix4d::Identity();
+        publish_std_pair(loop_std_pair, transform1, transform2, pubBTC, rgb);
+        // publish aligned source BTC
+        publish_std(loop_std_pair, T_target_source, pubAlignedBTC, true);
+
+        if (cloud_overlap < cloud_overlap_thr) {
+          // sleep for visualization
+          if (btc_manager->print_debug_info_)
+            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+        }
         slow_loop.sleep();
       } else {
         //=== clear rviz
@@ -467,6 +533,9 @@ int main(int argc, char **argv) {
         pcl::toROSMsg(empty_cloud, pub_cloud);
         pub_cloud.header.frame_id = "camera_init";
         pubMatchedBinary.publish(pub_cloud);
+        pcl::PointCloud<pcl::PointXYZRGB> empty_rgb_cloud;
+        pcl::toROSMsg(empty_rgb_cloud, pub_cloud);
+        pub_cloud.header.frame_id = "camera_init";
         pubMatchedCloud.publish(pub_cloud);
         // pubCloudPlane.publish(pub_cloud);
         // pubProjPlane.publish(pub_cloud);
