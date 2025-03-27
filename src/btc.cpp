@@ -2065,26 +2065,36 @@ void BtcDescManager::triangle_solver(
   for (int i = 0; i < std_pair_vec.size(); ++i) {
     const auto &pair = std_pair_vec[i];
     new_A = new_B = new_C = true;
-    for (auto &src_point : src_vec) {
-      if (new_A && IsEqual(src_point, pair.first.binary_A_.location_)) {
+    for (int i = 0; i < src_vec.size(); ++i) {
+      if (new_A && (IsEqual(src_vec[i], pair.first.binary_A_.location_) ||
+                    IsEqual(ref_vec[i], pair.second.binary_A_.location_))) {
         new_A = false;
-      }
-      if (new_B && IsEqual(src_point, pair.first.binary_B_.location_)) {
-        new_B = false;
-      }
-      if (new_C && IsEqual(src_point, pair.first.binary_C_.location_)) {
-        new_C = false;
+        break;
       }
     }
-    if(new_A) {
+    if (new_A) {
       src_vec.push_back(pair.first.binary_A_.location_);
       ref_vec.push_back(pair.second.binary_A_.location_);
     }
-    if(new_B) {
+    for (int i = 0; i < src_vec.size(); ++i) {
+      if (new_B && (IsEqual(src_vec[i], pair.first.binary_B_.location_) ||
+                    IsEqual(ref_vec[i], pair.second.binary_B_.location_))) {
+        new_B = false;
+        break;
+      }
+    }
+    if (new_B) {
       src_vec.push_back(pair.first.binary_B_.location_);
       ref_vec.push_back(pair.second.binary_B_.location_);
     }
-    if(new_C) {
+    for (int i = 0; i < src_vec.size(); ++i) {
+      if (new_C && (IsEqual(src_vec[i], pair.first.binary_C_.location_) ||
+                    IsEqual(ref_vec[i], pair.second.binary_C_.location_))) {
+        new_C = false;
+        break;
+      }
+    }
+    if (new_C) {
       src_vec.push_back(pair.first.binary_C_.location_);
       ref_vec.push_back(pair.second.binary_C_.location_);
     }
