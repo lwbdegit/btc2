@@ -10,6 +10,7 @@
 
 #include "include/btc.h"
 #include "include/utils.h"
+#include "include/btc_ros_dep.h"
 
 bool flg_exit_ = false;
 void SigHandle(int sig) {
